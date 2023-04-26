@@ -1,0 +1,703 @@
+---
+title: "Peromyscus Analysis"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: false
+    theme: cosmo
+    highlight: monochrome
+date: '2022-09-10'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(readxl)
+library(GUniFrac)
+library(RColorBrewer)
+library(phyloseq)
+library(microbiome)
+library(ANCOMBC)
+library(ape)
+library(ggpubr)
+library(magrittr)
+library(pastecs)
+library(raster)
+library(multivariance)
+library(actel)
+library(vegan)
+library(reshape2)
+```
+
+## Setup
+
+```{r functions, include = FALSE}
+# takes phyloseq object, desired taxonomic level, and desired grouping and outputs plot-able df
+plot.ancombc <- function(phy_object, taxonomy, grouping) {
+  tax_data = aggregate_taxa(phy_object, taxonomy)
+  tax_mat = as(tax_table(tax_data), "matrix")
+  ancombc_out = ancombc(phyloseq = tax_data, formula = grouping, p_adj_method = "BH", group = grouping)
+  res = ancombc_out$res
+  res_global = ancombc_out$res_global
+  
+  df_fig1 = data.frame(res$beta * res$diff_abn, check.names = FALSE) %>%
+    rownames_to_column("ASV")
+  colnames(df_fig1)[-1] = "BETA"
+  df_fig2 = data.frame(res$se * res$diff_abn, check.names = FALSE) %>%
+    rownames_to_column("ASV")
+  colnames(df_fig2)[-1] = "SD"
+  df_fig = df_fig1 %>% left_join(df_fig2, by = "ASV") %>%
+    transmute(ASV, BETA, SD) %>%
+    filter(BETA != 0) %>% arrange(desc(BETA)) %>%
+    mutate(group = ifelse(BETA >0, "g1", "g2"))
+  df_fig$ASV = factor(df_fig$ASV, levels = df_fig$ASV)
+  
+  return(df_fig)
+}
+
+plot.ancombc.asc <- function(phy_object, taxonomy, grouping) {
+  tax_data = aggregate_taxa(phy_object, taxonomy)
+  tax_mat = as(tax_table(tax_data), "matrix")
+  ancombc_out = ancombc(phyloseq = tax_data, formula = grouping, p_adj_method = "BH", group = grouping)
+  res = ancombc_out$res
+  res_global = ancombc_out$res_global
+  
+  df_fig1 = data.frame(res$beta * res$diff_abn, check.names = FALSE) %>%
+    rownames_to_column("ASV")
+  colnames(df_fig1)[-1] = "BETA"
+  df_fig2 = data.frame(res$se * res$diff_abn, check.names = FALSE) %>%
+    rownames_to_column("ASV")
+  colnames(df_fig2)[-1] = "SD"
+  df_fig = df_fig1 %>% left_join(df_fig2, by = "ASV") %>%
+    transmute(ASV, BETA, SD) %>%
+    filter(BETA != 0) %>% arrange(BETA) %>%
+    mutate(group = ifelse(BETA >0, "g1", "g2"))
+  df_fig$ASV = factor(df_fig$ASV, levels = df_fig$ASV)
+  
+  return(df_fig)
+}
+
+# calculates values for stats bars for plots
+data.summary <- function(x) {
+  m <- mean(x)
+  ymin <- m-sd(x)
+  ymax <- m+sd(x)
+  return(c(y=m,ymin=ymin,ymax=ymax))
+}
+```
+
+```{r ggplot parameters, include = FALSE}
+theme_set(theme_classic())
+
+# blue and red theme
+c = scale_color_manual(values = c("#174375", "#3089EE", "#A785F0", "#EAA7A1", "#C8195A", "#880808"))
+cf = scale_fill_manual(values = c("#174375", "#3089EE", "#A785F0", "#EAA7A1", "#C8195A", "#880808"))
+c2 = scale_color_manual(values = c("#000000", "#979797"))
+cf2 = scale_fill_manual(values = c("#000000", "#979797"))
+
+pd = position_dodge(width = .5)
+jpd = position_jitterdodge(
+  jitter.width = NULL,
+  jitter.height = 0,
+  dodge.width = 1.00,
+  seed = NA
+)
+
+ss = stat_summary(fun.data = data.summary, geom = "pointrange", position = pd, shape =18, size = 1, na.rm = TRUE)
+ssred = stat_summary(fun.data = data.summary, geom = "pointrange", position = pd, shape =18, color = "red", na.rm = TRUE)
+```
+
+```{r reading in files, echo = FALSE}
+# READ IN METADATA FILE
+metadata <- read_excel("~/Reese Lab/Projects/PER/PER_metadata_UPDATED.xlsx") %>% 
+  mutate(Sample_name2 = Sample_name) %>% 
+  column_to_rownames(var = "Sample_name")
+# metadata <- column_to_rownames(metadata, var = "Sample_name")
+metadata$Environment <- factor(metadata$Environment, levels = c("UN1", "UN2", "FU", "CZ", "CL1", "CL2"))
+metadata$Run <- factor(metadata$Run, levels = c("1", "2"))
+
+# READ IN COUNTS TABLE
+ASV_counts_decontam <- read.delim("~/Reese Lab/Projects/PER/ASV_counts_decontam.tsv", row.names=1, stringsAsFactors=TRUE)
+
+# READ IN TAXONOMY TABLE
+ASV_taxonomy_decontam <- read.delim("~/Reese Lab/Projects/PER/ASV_taxonomy_decontam.tsv", row.names=1, stringsAsFactors=TRUE)
+```
+
+
+```{r remove controls, echo = FALSE}
+## remove pos, neg controls from dfs for analysis
+negs = c("EXRN00", "EXRN01", "EXRN02", "EXRN03", "EXRN04", "EXRSTD", "PCRN01", "PCRN02", "PCRN03", "PCRN04", "PCRNSK1", "PCRNSK2", "PCRSTD01", "PCRSTD02", "PCRSTDSK", "PCZ19", "UNCGN")
+# negs = c("EXRN00", "EXRN01", "EXRN02", "EXRN03", "EXRN04", "EXRSTD", "PCRN01", "PCRN02", "PCRN03", "PCRN04", "PCRNSK1", "PCRNSK2", "PCZ19", "UNCGN")
+metadata_noneg <- metadata[!(row.names(metadata) %in% negs),]
+ASV_counts_noneg <- ASV_counts_decontam[,!(colnames(ASV_counts_decontam) %in% negs)]
+
+###FOR ANALYSIS USE: METADATA_NONEG, ASV_TAXONOMY_DECONTAM, ASV_COUNTS_NONEG
+```
+
+```{r read counts summary}
+# prints read counts info
+print(rowSums(t(ASV_counts_noneg)))
+summary(rowSums(t(ASV_counts_noneg)))
+sd(rowSums(t(ASV_counts_noneg)))
+```
+```{r rarefaction, echo = FALSE}
+# Rarefy to 19900, commented code was for rarefying at a higher count with cutoffs
+ASV_counts_rare <- Rarefy(t(ASV_counts_noneg), depth = 19900)$otu.tab.rff
+# low.reads = c("PCL14", "UNCG288", "UNCG295")
+# metadata_rare <- metadata_noneg[!(row.names(metadata_noneg) %in% low.reads),]
+metadata_rare <- metadata_noneg
+
+###FOR ANALYSIS USE: METADATA_RARE, ASV_TAXONOMY_DECONTAM, ASV_COUNTS_RARE
+```
+
+```{r phyloseq, echo = FALSE}
+# make phyloseq object https://vaulot.github.io/tutorials/Phyloseq_tutorial.html
+
+# imports tree file to make useable for phyloseq
+TREE <- read.tree("~/Reese Lab/Projects/PER/tree.nwk")
+new.tree <- ape::multi2di(TREE)
+
+# create phyloseq vars
+ASV = otu_table(ASV_counts_rare, taxa_are_rows = FALSE)
+TAX = tax_table(as.matrix(ASV_taxonomy_decontam))
+META = sample_data(metadata_rare)
+
+PER <- phyloseq(ASV, TAX, META, phy_tree(new.tree))
+```
+
+```{r dist matrices, echo = FALSE}
+DISTBC <- phyloseq::distance(PER, method="bray")
+DISTUU <- phyloseq::distance(PER, method="unifrac")
+DISTWU <- phyloseq::distance(PER, method="wunifrac")
+```
+
+## Beta Diversity
+
+```{r ordinations, echo = FALSE}
+## Bray-Curtis ordination
+brayPS <- ordinate(PER, method = "NMDS")
+BC <- plot_ordination(PER, brayPS, justDF = TRUE)
+
+## Weighted UniFrac ordination
+# WUniPS <- ordinate(PER, method = "NMDS", distance = "wunifrac")
+# WU <- plot_ordination(PER, WUniPS, justDF = TRUE)
+
+# removing PWZ10 outlier for WUnifrac
+PER_noPWZ10 = subset_samples(PER, row.names(metadata_rare) != "PWZ10")
+# ordination
+WUniPS2 <- ordinate(PER_noPWZ10, method = "NMDS", distance = "wunifrac")
+WU2 <- plot_ordination(PER_noPWZ10, WUniPS2, justDF = TRUE)
+
+## Unweighted UniFrac ordination
+UUniPS <- ordinate(PER, method = "NMDS", distance = "unifrac")
+UU <- plot_ordination(PER, UUniPS, justDF = TRUE)
+
+```
+```{r permanovas for analyzing beta diversity}
+# between all groups
+envt_bc <- adonis2(DISTBC ~ Environment, data = metadata_rare)
+
+# by environment type
+env_bc <- adonis2(DISTBC ~ Environment_type, data = metadata_rare)
+env_uu <- adonis2(DISTUU ~ Environment_type, data = metadata_rare)
+env_wu <- adonis2(DISTWU ~ Environment_type, data = metadata_rare)
+
+metadata_urbanvswild <- metadata_rare %>% 
+  filter(Condition == "Free-living")
+PER_urbanvswild <- subset_samples(PER, metadata_rare$Condition == "Free-living")
+DISTBC_urbanvswild <- phyloseq::distance(PER_urbanvswild, method="bray")
+env_bc_urbanvswild <- adonis2(DISTBC_urbanvswild ~ Environment_type, data = metadata_urbanvswild)
+
+# by condition
+cond_bc <- adonis2(DISTBC ~ Condition, data = metadata_rare)
+cond_uu <- adonis2(DISTUU ~ Condition, data = metadata_rare)
+cond_wu <- adonis2(DISTWU ~ Condition, data = metadata_rare)
+
+# by zoo status
+zoo_bc <- adonis2(DISTBC ~ Zoo_status, data = metadata_rare)
+zoo_uu <- adonis2(DISTUU ~ Zoo_status, data = metadata_rare)
+zoo_wu <- adonis2(DISTWU ~ Zoo_status, data = metadata_rare)
+
+# by sample type
+samp_bc <- adonis2(DISTBC ~ Sample_type, data = metadata_rare)
+samp_uu <- adonis2(DISTUU ~ Sample_type, data = metadata_rare)
+samp_wu <- adonis2(DISTWU ~ Sample_type, data = metadata_rare)
+
+# creating stats table for beta div analysis
+beta_p <- c(env_bc$`Pr(>F)`[1], env_uu$`Pr(>F)`[1], env_wu$`Pr(>F)`[1], 
+       cond_bc$`Pr(>F)`[1], cond_uu$`Pr(>F)`[1], cond_wu$`Pr(>F)`[1], 
+       zoo_bc$`Pr(>F)`[1], zoo_uu$`Pr(>F)`[1], zoo_wu$`Pr(>F)`[1], 
+       samp_bc$`Pr(>F)`[1], samp_uu$`Pr(>F)`[1], samp_wu$`Pr(>F)`[1])
+beta_stats <- data.frame(comparison = c("env_bc", "env_uu", "env_wu", 
+                                        "cond_bc", "cond_uu", "cond_wu", 
+                                        "zoo_bc", "zoo_uu", "zoo_wu", 
+                                        "samp_bc", "samp_uu", "samp_wu"),
+                         p = beta_p, 
+                         padj = p.adjust(beta_p, method = "holm"),
+                         r2 = c(env_bc$R2[1], env_uu$R2[1], env_wu$R2[1], 
+                                 cond_bc$R2[1], cond_uu$R2[1], cond_wu$R2[1], 
+                                 zoo_bc$R2[1], zoo_uu$R2[1], zoo_wu$R2[1], 
+                                 samp_bc$R2[1], samp_uu$R2[1], samp_wu$R2[1]),
+                         Fs = c(env_bc$F[1], env_uu$F[1], env_wu$F[1], 
+                                 cond_bc$F[1], cond_uu$F[1], cond_wu$F[1], 
+                                 zoo_bc$F[1], zoo_uu$F[1], zoo_wu$F[1], 
+                                 samp_bc$F[1], samp_uu$F[1], samp_wu$F[1]))
+beta_stats
+
+# controlling for sample type
+adonis2(DISTBC ~ Environment_type * Sample_type, by = "terms", data = metadata_rare)
+adonis2(DISTBC ~ Sample_type * Condition, by = "terms", data = metadata_rare)
+adonis2(DISTBC ~ Sample_type * Environment_type, by = "margin", data = metadata_rare)
+adonis2(DISTBC ~ Environment_type * Sample_type, by = "margin", data = metadata_rare)
+adonis2(DISTBC ~ Environment_type * Sample_type * Condition, by = NULL, data = metadata_rare)
+```
+
+## Alpha diversity
+```{r add shannon and richness and absolute abundance to metadata}
+# adding shannon and richness to metadata
+metadata_rare$Shannon <- vegan::diversity(ASV_counts_rare, index = "shannon", MARGIN = 1)
+metadata_rare$Richness <- specnumber(ASV_counts_rare)
+# long dataframe for alpha counts
+metadata_alpha_long = gather(metadata_rare, metric, value, Shannon, Richness)
+
+metadata_absolute <- subset(metadata_rare, row.names(metadata_rare) != "PCL03")
+```
+
+```{r alpha div}
+# checking for normal distribution
+shapiro.test(metadata_rare$Shannon) # significant 4.198e-07, not normally distributed
+shapiro.test(metadata_rare$Richness) # non-significant, normally distributed 0.05308
+
+# Kruskal Wallis tests for alpha diversity significance (shannon)
+shan_env <- kruskal.test(metadata_rare$Shannon ~ metadata_rare$Environment_type)
+shan_cond <- kruskal.test(metadata_rare$Shannon ~ metadata_rare$Condition)
+#shan_zoo <- kruskal.test(metadata_rare$Shannon ~ metadata_rare$Zoo_status)
+shan_type <- kruskal.test(metadata_rare$Shannon ~ metadata_rare$Sample_type)
+
+# Kruskal Wallis tests for alpha diversity significance (richness)
+rich_env <- kruskal.test(metadata_rare$Richness ~ metadata_rare$Environment_type)
+rich_cond <- kruskal.test(metadata_rare$Richness ~ metadata_rare$Condition)
+#rich_zoo <- kruskal.test(metadata_rare$Richness ~ metadata_rare$Zoo_status)
+rich_type <- kruskal.test(metadata_rare$Richness ~ metadata_rare$Sample_type)
+
+# create stats table with p values
+alpha_p <- data.frame(var = c("shan_env", "shan_cond", "shan_type", "rich_env", "rich_cond", "rich_type"),
+                      p = c(shan_env$p.value, shan_cond$p.value, shan_type$p.value, rich_env$p.value, rich_cond$p.value,  rich_type$p.value))
+alpha_p$padj <- p.adjust(alpha_p$p, method = "holm")
+```
+
+## Absolute abundance
+
+```{r bacterial load}
+metadata_absolute <- subset(metadata_rare, row.names(metadata_rare) != "PCL03")
+# checking for normal distribution
+shapiro.test(metadata_absolute$bact_cells_per_g_fecal) # significant 3.649e-10, not normally distributed
+
+# Kruskal Wallis significance tests
+abs_env <- kruskal.test(metadata_absolute$bact_cells_per_g_fecal ~ metadata_absolute$Environment_type)
+abs_cond <- kruskal.test(metadata_absolute$bact_cells_per_g_fecal ~ metadata_absolute$Condition)
+abs_zoo <- kruskal.test(metadata_absolute$bact_cells_per_g_fecal ~ metadata_absolute$Zoo_status)
+abs_type <- kruskal.test(metadata_absolute$bact_cells_per_g_fecal ~ metadata_absolute$Sample_type)
+
+# p adjust
+absolute_p <- data.frame(var = c("abs_env", "abs_cond", "abs_type"),
+                         p = c(abs_env$p.value, abs_cond$p.value,  abs_type$p.value))
+absolute_p$padj <- p.adjust(absolute_p$p, method = "holm")
+```
+
+```{r absolute abundance by other metrics}
+# absolute abundance by condition
+abso_cond <- ggplot(metadata_rare, aes(x = Condition, y = log(bact_cells_per_g_fecal), group = Condition)) +
+  geom_point(size = 3, position = jpd, aes(color = Condition), shape = 1) + 
+  #facet_wrap(~metric, scales = "free_y") +
+  c2 + ssred +
+  labs(x = "Condition", y = "Log(bacterial load)", title = "Absolute abundance by condition", color = "Condition") +
+  theme(legend.position = "none")
+abso_cond
+
+# absolute abundance by zoo status
+abso_zoo <- ggplot(metadata_rare, aes(x = Zoo_status, y = log(bact_cells_per_g_fecal), group = Zoo_status)) +
+  geom_point(size = 3, position = jpd, aes(color = Zoo_status), shape = 1) + 
+  #facet_wrap(~metric, scales = "free_y") +
+  c2 + ssred +
+  labs(x = "Zoo status", y = "Log(bacterial load)", title = "Absolute abundance by zoo status", color = "Zoo status") +
+  theme(legend.position = "none")
+abso_zoo
+
+# Supplementary Figure 5
+# Combines the three absolute abundance plots
+# Absolute <- ggpubr::ggarrange(abso_env, abso_cond, abso_zoo, labels = "AUTO", legend = "none", nrow=3)
+# Absolute
+```
+
+## Figure 1 (Bray Curtis, alpha diversity, absolute abundance)
+```{r figure 1}
+## Bray-Curtis
+BCPlot <- BC %>% 
+  ggplot(aes(x = NMDS1, y = NMDS2)) +
+  theme(legend.position = "right", text = element_text(size=20)) +
+  c +
+  geom_point(size = 4, aes(color = Environment, shape = Condition))
+  # geom_text(x = 2, y = 2, label = "Environment type p = 0.012") +
+  # geom_text(x = 2.2, y = 1.8, label = "Condition p = 0.012")
+BCPlot
+
+# shannon and richness values by environment (alpha diversity)
+alphaenv <- metadata_alpha_long %>% 
+  ggplot(aes(x = Environment, y = value)) +
+  geom_point(position = jpd, size = 4, aes(color = Environment, shape  = Condition)) +
+  facet_wrap(~metric, scales = "free_y") + c + ss +
+  labs(x = "Environment Type", y = "Value") +
+  theme(legend.position = "none", axis.text.x = element_text(size = 16), text = element_text(size=20))
+alphaenv
+
+# absolute abundance by environment
+abso_env <- metadata_rare %>% 
+  ggplot(aes(x = Environment, y = log(bact_cells_per_g_fecal))) +
+  geom_point(position = jpd, size = 4, aes(color = Environment, shape = Condition)) +
+  c + ss +
+  labs(x = "Environment Type", y = "Log(bacterial load)") +
+  theme(legend.position = "none", text = element_text(size=20))
+abso_env
+
+ # scale_shape_manual(name = "Condition", values = c(21,24))
+
+# Fig1 <- ggpubr::ggarrange(BCPlot, alphaenv, abso_env, common.legend = TRUE, labels = "AUTO", legend = "top", ncol = 1, nrow = 3, heights = c(4, 3, 3))
+# Fig1
+
+# ggsave(filename = "Figure_1A.svg", plot = BCPlot, path = "~/Reese Lab/Projects/PER/Manuscript/BIOLETTERS_PLOTS", device = "svg")
+# ggsave(filename = "Figure_1B.svg", plot = alphaenv, path = "~/Reese Lab/Projects/PER/Manuscript/BIOLETTERS_PLOTS", device = "svg")
+# ggsave(filename = "Figure_1C.svg", plot = abso_env, path = "~/Reese Lab/Projects/PER/Manuscript/BIOLETTERS_PLOTS", device = "svg")
+# # ggsave(filename = "Figure_1.svg", plot = Fig1, path = "~/Reese Lab/Projects/PER/Manuscript/BIOLETTERS_PLOTS", device = "svg")
+
+```
+```{r pairwise alpha and load comparisons}
+library(FSA)
+Dunn_shan <- dunnTest(Shannon ~ Environment, data = metadata_rare, method = "holm")
+Dunn_rich <- dunnTest(Richness ~ Environment, data = metadata_rare, method = "holm")
+Dunn_load <- dunnTest(bact_cells_per_g_fecal ~ Environment, data = metadata_rare, method = "holm")
+```
+
+## Supplementary Figure 1 (Weighted and Unweighted UniFrac)
+```{r supplementary figure 1}
+## Weighted UniFrac
+# WUPlot <- ggplot(data = WU, aes(x = NMDS1, y = NMDS2, color = Environment, shape = Condition)) +
+#   labs(title = "Weighted UniFrac") +
+#   c +
+#   #scale_shape_manual(name = "Condition", values = c(21, 24)) +
+#   geom_point(size = 3)
+# WUPlot
+
+## Weighted UniFrac without outlier
+WUPlot2 <- WU2 %>% 
+  ggplot(aes(x = NMDS1, y = NMDS2)) +
+  theme(legend.position = "none") +
+  c +
+  geom_point(size = 3, aes(color = Environment, shape = Condition)) +
+  labs(title = "Weighted UniFrac", subtitle = "Excluding FU outlier")
+WUPlot2
+  
+
+
+## Unweighted Unifrac
+UUPlot <- UU %>% 
+  ggplot(aes(x = NMDS1, y = NMDS2)) +
+  theme(legend.position = "none") +
+  c +
+  geom_point(size = 3, aes(color = Environment, shape = Condition)) +
+  labs(title = "Unweighted UniFrac")
+UUPlot
+
+## Supplementary Figure 3
+# combined weighted + unweighted unifrac beta diversity plots
+SupFig1 <- ggpubr::ggarrange(WUPlot2, UUPlot, common.legend = TRUE, labels = "AUTO", legend = "right")
+SupFig1
+
+# ggsave(filename = "SupFigure_1.svg", plot = SupFig1, path = "~/Reese Lab/Projects/PER/Manuscript/BIOLETTERS_PLOTS", device = "svg")
+```
+
+## Geography vs Bray Curtis
+
+```{r geographic analysis - with subset}
+samples_to_subset <- c("PCL10", "PCZ03", "PLS04", "PWW06", "PWZ09", "UNCG290")
+
+geo <- metadata_rare %>% 
+  filter(Sample_name2 %in% samples_to_subset)
+geo <- geo[c(16,17)]
+geo <- geo[c("Lon", "Lat")]
+
+
+PER_FOR_GEO <- PER %>% 
+  subset_samples(Sample_name2 %in% samples_to_subset)
+DISTBC_FOR_GEO <- phyloseq::distance(PER_FOR_GEO, method="bray")
+
+
+geo_dist <- raster::pointDistance(geo, lonlat = TRUE, allpairs = TRUE)
+
+geo_dist_full <- completeMatrix(t(geo_dist))
+DISTGEO <- as.dist(geo_dist_full)
+
+bray_geo <- mantel(DISTBC_FOR_GEO, DISTGEO, method = "spearman", permutations = 9999)
+bray_geo
+```
+
+```{r geography vs bray curtis plot}
+dist.melt <- melt(as.matrix(DISTBC))
+dist.melt <- dist.melt %>% 
+  filter(as.character(Var1) != as.character(Var2)) %>% 
+  mutate_if(is.factor, as.character)
+
+geo_all <- metadata_rare
+geo_all <- geo_all[c(16,17)]
+geo_all <- geo_all[c("Lon", "Lat")]
+
+rows <- row.names(geo_all)
+
+geo_dist_all <- raster::pointDistance(geo_all, lonlat = TRUE, allpairs = TRUE)
+rownames(geo_dist_all) <- rows
+colnames(geo_dist_all) <- rows
+
+geo_dist_full_all <- completeMatrix(t(geo_dist_all))
+DISTGEO_all <- as.dist(geo_dist_full_all)
+geo.melt <- melt(as.matrix(DISTGEO_all))
+geo.melt <- geo.melt %>% 
+  filter(as.character(Var1) != as.character(Var2)) %>% 
+  mutate_if(is.factor, as.character)
+
+# plot(geo.melt$value, dist.melt$value)
+# plot(dist.melt$value, geo.melt$value)
+
+bray_dists <- dist.melt$value
+geo_dists <- geo.melt$value
+GEO_BRAY <- data.frame(bray_dists, geo_dists, dist.melt$Var1, dist.melt$Var2)
+# write_xlsx(GEO_BRAY,"~/Reese Lab/Projects/PER/Manuscript/geobray.xlsx")
+# geobray_halved <- read_excel("Manuscript/geobray_halved.xlsx")
+
+geo_bc <- ggplot(geobray_halved, aes(x = bray_dists, y = geo_dists)) +
+  geom_point(size = 3, shape = 1) + 
+  labs(x = "Bray Curtis distance", y = "Geographical distance", title = "Bray Curtis and geographical distance between samples")
+geo_bc
+# ggsave(filename = "SupFigure_geobray.svg", plot = geo_bc, path = "~/Reese Lab/Projects/PER/Manuscript/BIOLETTERS_PLOTS", device = "svg")
+```
+
+## Misc stats
+
+Permanova for batch effects was super significant, which makes sense because it's just one population that clustered together.
+```{r batch effects}
+run <- adonis2(DISTBC ~ Run, data = metadata_rare)
+run
+```
+
+```{r relative abundance of major taxa}
+# find relative abundance by dividing by number of reads
+ASV_counts_rel <- t(ASV_counts_rare / 19900)
+
+# creating mini counts table of count for specific phyla
+proteo.counts <- ASV_counts_rel[row.names(ASV_counts_rel) %in% row.names(filter(ASV_taxonomy_decontam, ASV_taxonomy_decontam$Phylum == "Proteobacteria")),]
+actino.counts <- ASV_counts_rel[row.names(ASV_counts_rel) %in% row.names(filter(ASV_taxonomy_decontam, ASV_taxonomy_decontam$Phylum == "Actinobacteriota")),]
+bactero.counts <- ASV_counts_rel[row.names(ASV_counts_rel) %in% row.names(filter(ASV_taxonomy_decontam, ASV_taxonomy_decontam$Phylum == "Bacteroidota")),]
+firm.counts <- ASV_counts_rel[row.names(ASV_counts_rel) %in% row.names(filter(ASV_taxonomy_decontam, ASV_taxonomy_decontam$Phylum == "Firmicutes")),]
+
+# add counts to metadata table
+metadata_rare$Proteobacteria = colSums(proteo.counts)
+metadata_rare$Actinobacteriota = colSums(actino.counts)
+metadata_rare$Bacteroidota = colSums(bactero.counts)
+metadata_rare$Firmicutes = colSums(firm.counts)
+
+stat.desc(metadata_rare$Proteobacteria)
+stat.desc(metadata_rare$Actinobacteriota)
+stat.desc(metadata_rare$Bacteroidota)
+stat.desc(metadata_rare$Firmicutes)
+```
+
+```{r dispersion}
+# calculating dispersion (betadisper)
+dispersionEnv <- betadisper(DISTBC, metadata_rare$Environment_type)
+dispersionCond <- betadisper(DISTBC, metadata_rare$Condition)
+#dispersionZoo <- betadisper(DISTBC, metadata_rare$Zoo_status)
+dispersionType <- betadisper(DISTBC, metadata_rare$Sample_type)
+
+# compare pairwise dispersion significance by Environment
+(dispersionHSD <- TukeyHSD(dispersionEnv))
+plot(dispersionHSD)
+
+# permutation tests between groups
+disp_env <- permutest(dispersionEnv, pairwise=FALSE, permutations = 999)
+disp_cond <- permutest(dispersionCond, pairwise=FALSE, permutations = 999)
+#disp_zoo <- permutest(dispersionZoo, pairwise=FALSE, permutations = 999)
+disp_type <- permutest(dispersionType, pairwise=FALSE, permutations = 999)
+
+dispersion_p <- data.frame(var = c("env", "cont", "type"),
+                           p = c(disp_env$tab$`Pr(>F)`[1], disp_cond$tab$`Pr(>F)`[1], disp_type$tab$`Pr(>F)`[1]))
+dispersion_p$padj <-p.adjust(dispersion_p$p, method = "holm")
+
+```
+
+## ANCOM
+NOTE: RERUNNING THE ANCOM SECTIONS GIVES MARGINALLY DIFFERENT RESULTS THAT MAY MESS UP THE CODE
+PROBABLY THE BEST WAY TO DO THIS WOULD BE SOME KIND OF RUNNING MULTIPLE TIMES OR SET SEED
+```{r ANCOM urban vs undeveloped, eval = FALSE}
+# subset free-living samples
+PERWILD <- subset_samples(PER, Condition=="Free-living")
+
+# run ANCOMBC based on order and zoo status
+ANCOMOrdFUFR <- plot.ancombc(PERWILD, "Order", "Zoo_status")
+# remove unknowns
+ANCOMOrdFUFR <- ANCOMOrdFUFR[ANCOMOrdFUFR$ASV != "Unknown",]
+
+# make list of phyla represented by identified orders
+ANCOMOrdFUFRPhyla <- vector(mode = "list", length = 13)
+for(row in 1:13) {
+  order <- ANCOMOrdFUFR$ASV[row]
+  print(order)
+  for(tax in 1:length(t(ASV_taxonomy_decontam))) {
+    if(is.na(ASV_taxonomy_decontam$Order[tax])) {
+      print("NA")
+    } else if(ASV_taxonomy_decontam$Order[tax] == order){
+      phylum <- ASV_taxonomy_decontam$Phylum[tax]
+      print("match")
+      print(phylum)
+      ANCOMOrdFUFRPhyla[row] <- as.character(phylum)
+      break
+    } else {
+    }
+  }
+}
+ANCOMOrdFUFR$Phylum <- ANCOMOrdFUFRPhyla
+ANCOMOrdFUFR$Phylum <-factor(ANCOMOrdFUFR$Phylum, levels = c("Actinobacteriota", "Firmicutes", "Proteobacteria", "Desulfobacterota", "Deferribacterota"))
+
+# ANCOM plot for urban vs rural
+ANCOMOrdFUFRPlot = ggplot(data = ANCOMOrdFUFR,
+                          aes(x = ASV, y = BETA)) +
+  geom_point(size = 3, aes(colour = Phylum, group = Phylum)) +
+  geom_hline(yintercept = 0, size = 1) +
+  geom_errorbar(aes(ymin = BETA - SD, ymax = BETA + SD, color = Phylum), width = 0.4,
+                position = position_dodge(0.05)) +
+  labs(x = "Bacterial Order", y = "Log fold change") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid.minor.y = element_blank(),
+        axis.text.x = element_text(hjust = 1),
+        strip.background = element_blank(),
+        strip.text = element_blank(),
+        legend.position = "none")+
+  coord_flip() +
+  facet_grid(Phylum ~ ., scales = "free", space = "free") +
+  scale_color_manual(values = c("#F8766D", "#CD9600", "#7CAE00", "#00BE67", "#00BFC4"))
+ANCOMOrdFUFRPlot 
+
+# ggsave(filename = "Figure_2A.svg", plot = ANCOMOrdFUFRPlot, path = "~/Reese Lab/Projects/PER/Manuscript/BIOLETTERS_PLOTS", device = "svg", height = 8, width = 5)
+
+```
+
+
+```{r ANCOM captive zoo vs undeveloped, eval = FALSE}
+# subset free-living samples
+PERCZW <- PER %>% 
+  subset_samples(Environment_type == "Z" | Environment_type == "R")
+
+# run ANCOMBC based on order and zoo status
+ANCOMOrdCZW <- plot.ancombc(PERCZW, "Order", "Environment_type") 
+
+# make list of phyla represented by identified orders
+ANCOMOrdCZWPhyla <- vector(mode = "list", length = 31)
+for(row in 1:31) {
+  order <- ANCOMOrdCZW$ASV[row]
+  print(order)
+  for(tax in 1:length(t(ASV_taxonomy_decontam))) {
+    if(is.na(ASV_taxonomy_decontam$Order[tax])) {
+      print("NA")
+    } else if(ASV_taxonomy_decontam$Order[tax] == order){
+      phylum <- ASV_taxonomy_decontam$Phylum[tax]
+      print("match")
+      print(phylum)
+      ANCOMOrdCZWPhyla[row] <- as.character(phylum)
+      break
+    } else {
+    }
+  }
+}
+
+ANCOMOrdCZW$Phylum <- ANCOMOrdCZWPhyla
+ANCOMOrdCZW$Phylum <-factor(ANCOMOrdCZW$Phylum, levels = c("Actinobacteriota", "Firmicutes", "Proteobacteria", "Desulfobacterota", "Deferribacterota", "Cyanobacteria", "Elusimicrobiota", "Verrucomicrobiota", "Spirochaetota"))
+
+# ANCOM plot for captive zoo vs rural
+ANCOMOrdCZWPlot = ggplot(data = ANCOMOrdCZW,
+                          aes(x = ASV, y = BETA)) +
+  geom_point(size = 3, aes(colour = Phylum, group = Phylum)) +
+  geom_hline(yintercept = 0, size = 1) +
+  geom_errorbar(aes(ymin = BETA - SD, ymax = BETA + SD, color = Phylum), width = 0.4,
+                position = position_dodge(0.05)) +
+  labs(x = "Bacterial Order", y = "Log fold change") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid.minor.y = element_blank(),
+        axis.text.x = element_text(hjust = 1),
+        strip.background = element_blank(),
+        strip.text = element_blank(),
+        legend.position = "none")+
+  coord_flip() +
+  facet_grid(Phylum ~ ., scales = "free", space = "free") +
+  scale_color_manual(values = c("#F8766D", "#CD9600", "#7CAE00", "#00BE67", "#00BFC4", "#00A9FF", "#C77CFF", "#FF61CC", "#003300"))
+ANCOMOrdCZWPlot 
+
+# ggsave(filename = "Figure_2B.svg", plot = ANCOMOrdCZWPlot, path = "~/Reese Lab/Projects/PER/Manuscript/BIOLETTERS_PLOTS", device = "svg", height = 8, width = 5)
+
+```
+
+```{r ANCOM captive lab vs undeveloped, eval = FALSE}
+# subset free-living samples
+PERCLW <- PER %>% 
+  subset_samples(Environment_type == "L" | Environment_type == "R")
+
+# run ANCOMBC based on order and zoo status
+ANCOMOrdCLW <- plot.ancombc.asc(PERCLW, "Order", "Environment_type")
+
+# make list of phyla represented by identified orders
+ANCOMOrdCLWPhyla <- vector(mode = "list", length = 31)
+for(row in 1:31) {
+  order <- ANCOMOrdCLW$ASV[row]
+  print(order)
+  for(tax in 1:length(t(ASV_taxonomy_decontam))) {
+    if(is.na(ASV_taxonomy_decontam$Order[tax])) {
+      print("NA")
+    } else if(ASV_taxonomy_decontam$Order[tax] == order){
+      phylum <- ASV_taxonomy_decontam$Phylum[tax]
+      print("match")
+      print(phylum)
+      ANCOMOrdCLWPhyla[row] <- as.character(phylum)
+      break
+    } else {
+    }
+  }
+}
+ANCOMOrdCLW$Phylum <- ANCOMOrdCLWPhyla
+ANCOMOrdCLW$Phylum <-factor(ANCOMOrdCLW$Phylum, levels = c("Actinobacteriota", "Firmicutes", "Proteobacteria", "Desulfobacterota", "Deferribacterota", "Cyanobacteria", "Campylobacterota", "Patescibacteria"))
+ANCOMOrdCLW <- ANCOMOrdCLW %>%
+  mutate(BETA_flip = BETA*-1)
+
+# ANCOM plot for captive zoo vs rural
+ANCOMOrdCLWPlot = ggplot(data = ANCOMOrdCLW,
+                          aes(x = ASV, y = BETA_flip)) +
+  geom_point(size = 3, aes(colour = Phylum, group = Phylum)) +
+  geom_hline(yintercept = 0, size = 1) +
+  geom_errorbar(aes(ymin = BETA_flip - SD, ymax = BETA_flip + SD, color = Phylum), width = 0.4,
+                position = position_dodge(0.05)) +
+  labs(x = "Bacterial Order", y = "Log fold change") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid.minor.y = element_blank(),
+        axis.text.x = element_text(hjust = 1),
+        strip.background = element_blank(),
+        strip.text = element_blank(),
+        legend.position = "none")+
+  coord_flip() +
+  facet_grid(Phylum ~ ., scales = "free", space = "free") +
+  scale_color_manual(values = c("#F8766D", "#CD9600", "#7CAE00", "#00BE67", "#00BFC4", "#00A9FF", "#999000", "#6633FF"))
+ANCOMOrdCLWPlot 
+
+ggsave(filename = "Figure_2C.svg", plot = ANCOMOrdCLWPlot, path = "~/Reese Lab/Projects/PER/Manuscript/BIOLETTERS_PLOTS", device = "svg", height = 8, width = 5)
+
+```
