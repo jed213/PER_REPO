@@ -1,0 +1,15 @@
+#!/bin/bash
+#PBS -q hotel
+#PBS -N <<JOB_NAME>>
+#PBS -l nodes=1:ppn=8
+#PBS -l walltime=20:00:00
+#PBS -o /projects/ps-aspenlab/<<OUT FILE PATH>>
+#PBS -e /projects/ps-aspenlab/<<ERR FILE PATH>>
+#PBS -V
+#PBS -M <<EMAIL
+#PBS -m ae
+#PBS -A reese-group
+
+export MODULEPATH=/projects/builder-group/jpg/modulefiles/applications:$MODULEPATH
+module load R/4.0.2
+Rscript --no-save /projects/ps-aspenlab/<<PATH_TO_R_SCRIPT>>

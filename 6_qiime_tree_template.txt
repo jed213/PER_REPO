@@ -1,0 +1,47 @@
+#!/bin/bash
+#PBS -q hotel
+#PBS -N qiime_tree
+#PBS -l nodes=1:ppn=8
+#PBS -l walltime=20:00:00
+#PBS -o /projects/ps-aspenlab/<<PATH>>/outs/qiime_tree_out
+#PBS -e /projects/ps-aspenlab/<<PATH>>/errs/qiime_tree_err
+#PBS -V
+#PBS -M <<EMAIL>>
+#PBS -m ae
+#PBS -A reese-group
+
+source ~/.bashrc
+conda activate qiime2-2021.2
+
+# working directory - all files will be saved here
+cd /projects/ps-aspenlab/<<PATH>>/saved_output
+
+# import fasta file and convert to qiime2 object (.qza)
+# mb_filtered_seqs.fna is a fasta file with all ASVs and ids
+qiime tools import \
+  --input-path ASVs_decontam.fa \
+  --output-path mb_filtered_seqs.qza \
+  --type 'FeatureData[Sequence]'
+
+# run multiple alignment
+qiime alignment mafft \
+  --i-sequences mb_filtered_seqs.qza \
+  --o-alignment aligned-mb-seqs.qza
+
+# mask alignment to reduce ambiguity
+qiime alignment mask \
+  --i-alignment aligned-mb-seqs.qza \
+  --o-masked-alignment masked-aligned-mb-seqs.qza
+
+qiime phylogeny fasttree \
+  --i-alignment masked-aligned-mb-seqs.qza \
+  --o-tree fasttree-tree.qza
+
+qiime phylogeny midpoint-root \
+  --i-tree fasttree-tree.qza \
+  --o-rooted-tree fasttree-tree-rooted.qza
+
+# export rooted tree
+qiime tools export \
+  --input-path fasttree-tree-rooted.qza \
+  --output-path mb-rooted-fasttree_filtered.tre

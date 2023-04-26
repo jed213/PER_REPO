@@ -1,0 +1,79 @@
+# load dada2 package
+library(dada2)
+packageVersion('dada2')
+
+# save sample names as R object
+sample.names <- scan("<<PATH_TO_SAMPLES_FILE>>/samples.txt", what="character")
+
+# create lists of file paths and names for the trimmed files
+trimFs <- paste0("/projects/ps-aspenlab/<<PATH>>/trimmed/", sample.names, "_trimmed_R1.fastq")
+trimRs <- paste0("/projects/ps-aspenlab/<<PATH>>/trimmed/", sample.names, "_trimmed_R2.fastq")
+
+# change directory to send the plots
+setwd("/projects/ps-aspenlab/<<PATH>>/saved_output")
+
+# create pdf of quality profiles for forward samples
+# tried to make a loop for this but it didn't work so this is hardcoded for 105 samples
+# edit lines as needed for your number of samples - four at a time looks pretty good but can definitely be condensed
+pdf("qual_profiles_F.pdf")
+plotQualityProfile(trimFs[1:4])
+plotQualityProfile(trimFs[5:8])
+plotQualityProfile(trimFs[9:12])
+plotQualityProfile(trimFs[13:16])
+plotQualityProfile(trimFs[17:20])
+plotQualityProfile(trimFs[21:24])
+plotQualityProfile(trimFs[25:28])
+plotQualityProfile(trimFs[29:32])
+plotQualityProfile(trimFs[33:36])
+plotQualityProfile(trimFs[37:40])
+plotQualityProfile(trimFs[41:44])
+plotQualityProfile(trimFs[45:48])
+plotQualityProfile(trimFs[49:52])
+plotQualityProfile(trimFs[53:56])
+plotQualityProfile(trimFs[57:60])
+plotQualityProfile(trimFs[61:64])
+plotQualityProfile(trimFs[65:68])
+plotQualityProfile(trimFs[69:72])
+plotQualityProfile(trimFs[73:76])
+plotQualityProfile(trimFs[77:80])
+plotQualityProfile(trimFs[81:84])
+plotQualityProfile(trimFs[85:88])
+plotQualityProfile(trimFs[89:92])
+plotQualityProfile(trimFs[93:96])
+plotQualityProfile(trimFs[97:100])
+plotQualityProfile(trimFs[101:104])
+plotQualityProfile(trimFs[105])
+dev.off()
+
+# create pdf of quality profiles for reverse samples
+pdf("qual_profiles_R.pdf")
+plotQualityProfile(trimRs[1:4])
+plotQualityProfile(trimRs[5:8])
+plotQualityProfile(trimRs[9:12])
+plotQualityProfile(trimRs[13:16])
+plotQualityProfile(trimRs[17:20])
+plotQualityProfile(trimRs[21:24])
+plotQualityProfile(trimRs[25:28])
+plotQualityProfile(trimRs[29:32])
+plotQualityProfile(trimRs[33:36])
+plotQualityProfile(trimRs[37:40])
+plotQualityProfile(trimRs[41:44])
+plotQualityProfile(trimRs[45:48])
+plotQualityProfile(trimRs[49:52])
+plotQualityProfile(trimRs[53:56])
+plotQualityProfile(trimRs[57:60])
+plotQualityProfile(trimRs[61:64])
+plotQualityProfile(trimRs[65:68])
+plotQualityProfile(trimRs[69:72])
+plotQualityProfile(trimRs[73:76])
+plotQualityProfile(trimRs[77:80])
+plotQualityProfile(trimRs[81:84])
+plotQualityProfile(trimRs[85:88])
+plotQualityProfile(trimRs[89:92])
+plotQualityProfile(trimRs[93:96])
+plotQualityProfile(trimRs[97:100])
+plotQualityProfile(trimRs[101:104])
+plotQualityProfile(trimRs[105])
+dev.off()
+
+# final output is two pdfs of quality score profiles - forward and reverse
